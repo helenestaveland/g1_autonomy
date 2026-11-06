@@ -1,0 +1,254 @@
+name: helene-g1-refactor
+
+# Two independent Compose profiles, sharing host networking as in the
+# verified manual setup. No existing helene-g1-* container is changed.
+services:
+  # ====================== UNITREE ======================
+    # Build Unitree G1 controller from source
+  build_g1:
+    profiles: [build]
+    image: helene-g1-runtime:local
+    user: "helene:helene"
+    network_mode: none
+    working_dir: /workspace/unitree_rl_lab/deploy/robots/g1_29dof
+    environment:
+      HOME: /tmp/helene
+      G1_BUILD_JOBS: "${G1_BUILD_JOBS:-4}"
+    volumes:
+      - ./repos/unitree_rl_lab:/workspace/unitree_rl_lab:rw
+    command:
+      - bash
+      - -lc
+      - |
+        set -e
+        source /opt/ros/humble/setup.bash
+        cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        cmake --build build --parallel "$$G1_BUILD_JOBS"
+        test -x build/g1_ctrl
+
+  mujoco:
+    profiles: [unitree]
+    image: helene-g1-runtime:local
+    build:
+      context: .
+      dockerfile: docker/g1_runtime/Dockerfile
+    user: "helene:helene"
+    network_mode: host
+    restart: "no"
+    environment:
+      HOME: /tmp/helene
+      DISPLAY: "${G1_DISPLAY:-${DISPLAY:-:0}}"
+      PYTHONPATH: /workspace/MuJoCo-LiDAR/src:/workspace/MuJoCo-LiDAR
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: graphics,display,utility,compute
+      ROS_DOMAIN_ID: "0"
+      RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+      FASTDDS_BUILTIN_TRANSPORTS: UDPv4
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ./repos/unitree_mujoco:/workspace/unitree_mujoco:rw
+      - ./repos/unitree_rl_lab:/workspace/unitree_rl_lab:rw
+      - ./repos/MuJoCo-LiDAR:/workspace/MuJoCo-LiDAR:rw
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    command:
+      - bash
+      - -lc
+      - |
+        source /opt/ros/humble/setup.bash
+        cd /workspace/unitree_mujoco/simulate_python
+        exec python3 -c 'import config, runpy; config.ROBOT_SCENE = "../unitree_robots/g1/scene_29dof_room.xml"; runpy.run_path("unitree_mujoco.py", run_name="__main__")'
+
+  g1_ctrl:
+    profiles: [unitree]
+    image: helene-g1-runtime:local
+    user: "helene:helene"
+    network_mode: host
+    gpus: all
+    restart: "no"
+    depends_on:
+      mujoco:
+        condition: service_started
+    environment:
+      HOME: /tmp/helene
+      ROS_DOMAIN_ID: "0"
+      RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+      FASTDDS_BUILTIN_TRANSPORTS: UDPv4
+    stdin_open: true
+    tty: true
+    volumes:
+      - ./repos/unitree_rl_lab:/workspace/unitree_rl_lab:rw
+    command: ["sleep", "infinity"]
+
+  # ================= UNIFIED AUTONOMY STACK =================
+  ros1_master:
+    extends:
+      file: ./repos/unified_autonomy_stack/docker-compose.base.yml
+      service: ros1_launch_roscore
+
+    profiles: !override [autonomy]
+    image: helene-unified:ros1-base
+
+    # Keep our project's ROS1 master separate.
+    environment:
+      ROS_MASTER_URI: http://127.0.0.1:11321
+      ROS_IP: 127.0.0.1
+
+    # Preserve the previous container's private IPC setting.
+    ipc: private
+
+    command:
+      - bash
+      - -lc
+      - source /opt/ros/noetic/setup.bash && exec roscore -p 11321
+
+    healthcheck:
+      test: ["CMD-SHELL", "bash -lc 'source /opt/ros/noetic/setup.bash && rosparam get /run_id >/dev/null 2>&1'"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 3s
+
+  ros2_bridge:
+    profiles: [autonomy]
+    image: helene-unified:ros1-bridge-builder
+    network_mode: host
+    restart: "no"
+    depends_on:
+      ros1_master:
+        condition: service_healthy
+    environment:
+      ROS_MASTER_URI: http://127.0.0.1:11321
+      ROS_IP: 127.0.0.1
+      ROS_DOMAIN_ID: "0"
+      ROS_LOCALHOST_ONLY: "0"
+      FASTDDS_BUILTIN_TRANSPORTS: UDPv4
+    command:
+      - bash
+      - -lc
+      - |
+        source /opt/ros/humble/setup.bash
+        source /ws_ros1_bridge/install/setup.bash
+        exec ros2 run ros1_bridge dynamic_bridge --bridge-all-2to1-topics
+
+  ros1_mimosa:
+    profiles: [autonomy]
+    image: helene-unified:ros1-base
+    network_mode: host
+    restart: "no"
+    depends_on:
+      ros1_master:
+        condition: service_healthy
+      ros2_bridge:
+        condition: service_started
+    environment:
+      ROS_MASTER_URI: http://127.0.0.1:11321
+      ROS_IP: 127.0.0.1
+    volumes:
+      - ./repos/unified_autonomy_stack/workspaces/ws_mimosa:/workspace:rw
+      - ./repos/unified_autonomy_stack/workspaces/robot_bringup:/workspace/src/robot_bringup:ro
+    command:
+      - bash
+      - -lc
+      - |
+        source /opt/ros/noetic/setup.bash
+        source /workspace/devel/setup.bash
+        exec roslaunch robot_bringup mimosa.launch viz:=false
+    healthcheck:
+      test: ["CMD-SHELL", "bash -lc 'source /opt/ros/noetic/setup.bash && timeout 8 rostopic echo -n 1 /mimosa_node/graph/odometry/header >/dev/null 2>&1'"]
+      interval: 15s
+      timeout: 12s
+      retries: 30
+      start_period: 45s
+
+  ros1_gbplanner:
+    profiles: [autonomy]
+    image: helene-unified:ros1-gbplanner
+    network_mode: host
+    restart: "no"
+    depends_on:
+      ros1_mimosa:
+        condition: service_healthy
+    environment:
+      ROS_MASTER_URI: http://127.0.0.1:11321
+      ROS_IP: 127.0.0.1
+    volumes:
+      - ./repos/unified_autonomy_stack/workspaces/ws_gbplanner:/workspace:rw
+      - ./repos/unified_autonomy_stack/workspaces/robot_bringup:/workspace/src/robot_bringup:ro
+    command:
+      - bash
+      - -lc
+      - |
+        source /opt/ros/noetic/setup.bash
+        source /workspace/devel/setup.bash
+        exec roslaunch robot_bringup gbplanner_g1_workstation.launch rviz_en:=false
+
+  pure_pursuit:
+    profiles: [autonomy]
+    image: helene-g1-runtime:local
+    user: "helene:helene"
+    network_mode: host
+    restart: "no"
+    depends_on:
+      ros1_gbplanner:
+        condition: service_started
+    environment:
+      HOME: /tmp/helene
+      ROS_DOMAIN_ID: "0"
+      RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+      FASTDDS_BUILTIN_TRANSPORTS: UDPv4
+    volumes:
+      - ./scripts/path_tracker_g1.py:/opt/g1/path_tracker_g1.py:ro
+    command:
+      - bash
+      - -lc
+      - |
+        source /opt/ros/humble/setup.bash
+        exec python3 -u /opt/g1/path_tracker_g1.py --ros-args \
+          -r path:=/gbplanner_path \
+          -r odometry:=/mimosa_node/graph/odometry \
+          -r cmd_vel:=/helene/g1_cmd_vel \
+          -p robot_frame:=mimosa_body \
+          -p desired_vel:=0.50 \
+          -p max_lin_vel:=0.50 \
+          -p max_ang_vel:=0.2
+
+  rviz:
+    profiles: [autonomy]
+    image: helene-unified:ros1-gbplanner
+    network_mode: host
+    restart: "no"
+    depends_on:
+      ros1_gbplanner:
+        condition: service_started
+    environment:
+      DISPLAY: "${G1_DISPLAY:-${DISPLAY:-:0}}"
+      XAUTHORITY: /tmp/Xauthority
+      ROS_MASTER_URI: http://127.0.0.1:11321
+      ROS_IP: 127.0.0.1
+      NVIDIA_DRIVER_CAPABILITIES: graphics,display,utility,compute
+      QT_X11_NO_MITSHM: "1"
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${G1_XAUTHORITY:-/run/user/1002/gdm/Xauthority}:/tmp/Xauthority:ro
+      - ./repos/unified_autonomy_stack/workspaces/ws_gbplanner:/workspace:rw
+      - ./repos/unified_autonomy_stack/workspaces/robot_bringup:/workspace/src/robot_bringup:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    command:
+      - bash
+      - -lc
+      - |
+        source /opt/ros/noetic/setup.bash
+        source /workspace/devel/setup.bash
+        exec rviz -d /workspace/src/robot_bringup/rviz/ros1/rmf.rviz
