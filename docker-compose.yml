@@ -245,7 +245,7 @@ services:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ${G1_XAUTHORITY:-/run/user/1002/gdm/Xauthority}:/tmp/Xauthority:ro
       - ./repos/unified_autonomy_stack/workspaces/ws_gbplanner:/workspace:rw
-      - ./repos/unified_autonomy_stack/workspaces/robot_bringup:/workspace/src/robot_bringup:ro
+      - ./repos/unified_autonomy_stack/workspaces/robot_bringup:/workspace/src/robot_bringup:rw
     deploy:
       resources:
         reservations:
