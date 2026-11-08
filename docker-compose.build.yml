@@ -1,0 +1,50 @@
+name: g1-autonomy-build
+
+x-catkin-template: &catkin-template
+  profiles: [build]
+  working_dir: /workspace
+  network_mode: host
+  restart: "no"
+  stdin_open: true
+  tty: true
+  environment:
+    DISABLE_ROS1_EOL_WARNINGS: "1"
+
+services:
+  build_mimosa:
+    <<: *catkin-template
+    image: unified_autonomy:ros1_base
+    volumes:
+      - ./repos/unified_autonomy_stack/workspaces/ws_mimosa:/workspace:rw
+      - ./repos/unified_autonomy_stack/workspaces/robot_bringup:/workspace/src/robot_bringup:ro
+    command:
+      - bash
+      - -lc
+      - |
+        set -e
+        catkin init
+        catkin config \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DGTSAM_POSE3_EXPMAP=ON \
+          -DGTSAM_ROT3_EXPMAP=ON \
+          -DGTSAM_USE_QUATERNIONS=ON \
+          -DGTSAM_USE_SYSTEM_EIGEN=OFF \
+          -DGTSAM_BUILD_WITH_MARCH_NATIVE=OFF \
+          -DGTSAM_BUILD_UNSTABLE=ON \
+          -DGTSAM_BUILD_EXAMPLES_ALWAYS=OFF \
+          -DGTSAM_WITH_TBB=OFF
+        catkin build
+
+  build_gbplanner:
+    <<: *catkin-template
+    image: unified_autonomy:ros1_gbplanner
+    volumes:
+      - ./repos/unified_autonomy_stack/workspaces/ws_gbplanner:/workspace:rw
+      - ./repos/unified_autonomy_stack/workspaces/robot_bringup:/workspace/src/robot_bringup:ro
+    command:
+      - bash
+      - -lc
+      - |
+        set -e
+        catkin init
+        catkin build -DCMAKE_BUILD_TYPE=Release
