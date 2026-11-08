@@ -152,7 +152,25 @@ Compatibility patches for GTSAM and MIMOSA are preserved under `patches/`. They 
 
 The original GBPlanner workspace used a Release build with Catkin.
 
-The exact workspace build procedure and integration testing still need to be verified on the reconstructed environment.
+
+### Build MIMOSA
+
+From the repository root, run:
+
+    docker compose -f docker-compose.build.yml --profile build run --rm build_mimosa
+
+This uses the original ARL ROS1 base image and GTSAM build settings.
+
+### Build GBPlanner
+
+    docker compose -f docker-compose.build.yml --profile build run --rm build_gbplanner
+
+This uses the original ARL GBPlanner image.
+
+Both commands compile the pinned source repositories. Generated build and devel directories remain in their respective workspaces.
+
+The builds and complete G1 integration have not yet been tested.
+
 
 ## Running the system
 
