@@ -220,7 +220,7 @@ services:
         exec python3 -u /opt/g1/path_tracker_g1.py --ros-args \
           -r path:=/gbplanner_path \
           -r odometry:=/mimosa_node/graph/odometry \
-          -r cmd_vel:=/helene/g1_cmd_vel \
+          -r cmd_vel:=/g1/cmd_vel \
           -p robot_frame:=mimosa_body \
           -p desired_vel:=0.50 \
           -p max_lin_vel:=0.50 \
