@@ -176,7 +176,7 @@ services:
 
   ros1_gbplanner:
     profiles: [autonomy]
-    image: helene-unified:ros1-gbplanner
+    image: unified_autonomy:ros1_gbplanner
     network_mode: host
     restart: "no"
     depends_on:
@@ -228,7 +228,7 @@ services:
 
   rviz:
     profiles: [autonomy]
-    image: helene-unified:ros1-gbplanner
+    image: unified_autonomy:ros1_gbplanner
     network_mode: host
     restart: "no"
     depends_on:
