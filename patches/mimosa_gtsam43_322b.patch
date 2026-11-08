@@ -1,0 +1,96 @@
+--- a/mimosa/CMakeLists.txt
++++ b/mimosa/CMakeLists.txt
+@@ -61,6 +61,7 @@
+ include_directories(
+   include
+   SYSTEM
++  ${GTSAM_INCLUDE_DIR}/gtsam/3rdparty/Eigen
+   ${catkin_INCLUDE_DIRS}
+   ${PCL_INCLUDE_DIRS}
+   ${GTSAM_INCLUDE_DIR}
+--- a/mimosa/include/mimosa/graph/manager.hpp
++++ b/mimosa/include/mimosa/graph/manager.hpp
+@@ -17,7 +17,7 @@
+ #include <nav_msgs/Odometry.h>
+ 
+ // GTSAM
+-#include <gtsam_unstable/nonlinear/IncrementalFixedLagSmoother.h>
++#include <gtsam/nonlinear/IncrementalFixedLagSmoother.h>
+ 
+ #define SMOOTHER_IFL true
+ namespace mimosa
+--- a/mimosa/include/mimosa/imu/manager.hpp
++++ b/mimosa/include/mimosa/imu/manager.hpp
+@@ -20,6 +20,7 @@
+ 
+ // GTSAM
+ #include <gtsam/navigation/ImuFactor.h>
++#include <gtsam/navigation/ImuFactorWithGravity.h>
+ #include <gtsam/nonlinear/NonlinearFactorGraph.h>
+ #include <gtsam/slam/BetweenFactor.h>
+ 
+--- a/mimosa/include/mimosa/lidar/geometric.hpp
++++ b/mimosa/include/mimosa/lidar/geometric.hpp
+@@ -14,7 +14,7 @@
+ #include <gtsam/nonlinear/Marginals.h>
+ #include <gtsam/nonlinear/NonlinearFactorGraph.h>
+ #include <gtsam/nonlinear/Values.h>
+-#include <gtsam_unstable/nonlinear/IncrementalFixedLagSmoother.h>
++#include <gtsam/nonlinear/IncrementalFixedLagSmoother.h>
+ 
+ // mimosa
+ #include "mimosa/lidar/geometric_config.hpp"
+--- a/mimosa/src/imu/manager.cpp
++++ b/mimosa/src/imu/manager.cpp
+@@ -146,7 +146,8 @@
+     // Predict the state
+     nav_state = propagation_preintegrator_->predict(
+       propagation_base_state_.navState(), propagation_base_state_.imuBias(),
+-      propagation_base_state_.gravity());
++      propagation_base_state_.gravity().unitVector() *
++        config_.preintegration.gravity_magnitude);
+   }
+ 
+   // Publish propagated odometry
+@@ -409,7 +410,7 @@
+   const gtsam::Key key_0, const gtsam::Key key_1, gtsam::NonlinearFactorGraph & graph)
+ {
+   updatePreintegrationTo(ts_0, ts_1, bias_0, preintegrator_);
+-  graph.add(gtsam::ImuFactorWithGravity(
++  graph.add(gtsam::ImuFactorWithGravityDirection(
+     X(key_0), V(key_0), X(key_1), V(key_1), B(key_0), G(0), *preintegrator_));
+ 
+   const auto imu_bias_random_walk =
+@@ -440,7 +441,9 @@
+   {
+     std::lock_guard<std::mutex> lock(preintegrator_mutex_);
+     addImuFactorNoLock(state_0.ts(), ts_1, state_0.imuBias(), state_0.key(), key_1, graph);
+-    ns_1 = preintegrator_->predict(state_0.navState(), state_0.imuBias(), state_0.gravity());
++    ns_1 = preintegrator_->predict(
++      state_0.navState(), state_0.imuBias(),
++      state_0.gravity().unitVector() * config_.preintegration.gravity_magnitude);
+     logger_->trace("predicted state");
+   }
+ 
+--- a/mimosa/src/lidar/manager.cpp
++++ b/mimosa/src/lidar/manager.cpp
+@@ -463,7 +463,9 @@
+ 
+     curr_state = propagated_state_;
+     propagated_state_ =
+-      imu_preintegrator_->predict(state.navState(), state.imuBias(), state.gravity());
++      imu_preintegrator_->predict(
++        state.navState(), state.imuBias(),
++        state.gravity().unitVector() * imu_preintegrator_->params()->getGravity().norm());
+     // Propagated state is at the time of the next_itr
+ 
+     while (true) {
+@@ -483,7 +485,7 @@
+       gtsam::Rot3 R_W_Bt = curr_state.pose().rotation() * gtsam::Rot3::Expmap(omega * delta_t);
+       V3D p_W_Bt = curr_state.pose().translation() + curr_state.velocity() * delta_t +
+                    0.5 * curr_state.pose().rotation().matrix() * acc * delta_t * delta_t +
+-                   0.5 * state.gravity() * imu_preintegrator_->params()->getGravity().norm() *
++                   0.5 * state.gravity().unitVector() * imu_preintegrator_->params()->getGravity().norm() *
+                      delta_t * delta_t;
+ 
+       T_W_Bts_at_unique_ns.emplace_back(gtsam::Pose3(R_W_Bt, p_W_Bt));
