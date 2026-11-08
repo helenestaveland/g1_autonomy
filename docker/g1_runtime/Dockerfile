@@ -5,12 +5,12 @@ FROM g1-sim:dev
 SHELL ["/bin/bash", "-c"]
 
 RUN set -eux; \
-    if ! getent group helene >/dev/null; then groupadd -g 1002 helene; fi; \
-    if ! id -u helene >/dev/null 2>&1; then \
-        useradd -u 1002 -g helene -d /tmp/helene -s /bin/bash helene; \
+    if ! getent group g1user >/dev/null; then groupadd -g 1002 g1user; fi; \
+    if ! id -u g1user >/dev/null 2>&1; then \
+        useradd -u 1002 -g g1user -d /tmp/g1user -s /bin/bash g1user; \
     fi; \
-    mkdir -p /tmp/helene; \
-    chown helene:helene /tmp/helene
+    mkdir -p /tmp/g1user; \
+    chown g1user:g1user /tmp/g1user
 
-ENV HOME=/tmp/helene
+ENV HOME=/tmp/g1user
 WORKDIR /workspace

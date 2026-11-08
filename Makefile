@@ -44,4 +44,4 @@ logs:
 	$(COMPOSE) $(ALL) logs -f --tail=100
 
 controller:
-	$(COMPOSE) exec --user helene:helene g1_ctrl bash -lc 'source /opt/ros/humble/setup.bash && export LD_LIBRARY_PATH=/opt/cyclonedds/lib:$$LD_LIBRARY_PATH && export RMW_IMPLEMENTATION=rmw_fastrtps_cpp && export FASTDDS_BUILTIN_TRANSPORTS=UDPv4 && export ROS_DOMAIN_ID=0 && cd /workspace/unitree_rl_lab/deploy/robots/g1_29dof && exec ./build/g1_ctrl --network lo'
+	$(COMPOSE) exec --user g1user:g1user g1_ctrl bash -lc 'source /opt/ros/humble/setup.bash && export LD_LIBRARY_PATH=/opt/cyclonedds/lib:$$LD_LIBRARY_PATH && export RMW_IMPLEMENTATION=rmw_fastrtps_cpp && export FASTDDS_BUILTIN_TRANSPORTS=UDPv4 && export ROS_DOMAIN_ID=0 && cd /workspace/unitree_rl_lab/deploy/robots/g1_29dof && exec ./build/g1_ctrl --network lo'

@@ -69,7 +69,7 @@ RUN python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel \
         python3 -m pip install --no-cache-dir -e .
 
 # Python dependencies for the modified MuJoCo simulator and JT128 publisher.
-# MuJoCo-LiDAR itself will be mounted from Helene's repository so that her
+# MuJoCo-LiDAR itself will be mounted from the project repository so that its
 # modified source remains outside the disposable container.
 RUN python3 -m pip install --no-cache-dir \
     "numpy<2" \

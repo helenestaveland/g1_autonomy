@@ -1,18 +1,18 @@
 name: g1-autonomy
 
 # Two independent Compose profiles, sharing host networking as in the
-# verified manual setup. No existing helene-g1-* container is changed.
+# verified manual setup. Existing workstation containers are not modified.
 services:
   # ====================== UNITREE ======================
     # Build Unitree G1 controller from source
   build_g1:
     profiles: [build]
     image: g1-runtime:local
-    user: "helene:helene"
+    user: "g1user:g1user"
     network_mode: none
     working_dir: /workspace/unitree_rl_lab/deploy/robots/g1_29dof
     environment:
-      HOME: /tmp/helene
+      HOME: /tmp/g1user
       G1_BUILD_JOBS: "${G1_BUILD_JOBS:-4}"
     volumes:
       - ./repos/unitree_rl_lab:/workspace/unitree_rl_lab:rw
@@ -32,11 +32,11 @@ services:
     build:
       context: .
       dockerfile: docker/g1_runtime/Dockerfile
-    user: "helene:helene"
+    user: "g1user:g1user"
     network_mode: host
     restart: "no"
     environment:
-      HOME: /tmp/helene
+      HOME: /tmp/g1user
       DISPLAY: "${G1_DISPLAY:-${DISPLAY:-:0}}"
       PYTHONPATH: /workspace/MuJoCo-LiDAR/src:/workspace/MuJoCo-LiDAR
       NVIDIA_VISIBLE_DEVICES: all
@@ -67,7 +67,7 @@ services:
   g1_ctrl:
     profiles: [unitree]
     image: g1-runtime:local
-    user: "helene:helene"
+    user: "g1user:g1user"
     network_mode: host
     gpus: all
     restart: "no"
@@ -75,7 +75,7 @@ services:
       mujoco:
         condition: service_started
     environment:
-      HOME: /tmp/helene
+      HOME: /tmp/g1user
       ROS_DOMAIN_ID: "0"
       RMW_IMPLEMENTATION: rmw_fastrtps_cpp
       FASTDDS_BUILTIN_TRANSPORTS: UDPv4
@@ -199,14 +199,14 @@ services:
   pure_pursuit:
     profiles: [autonomy]
     image: g1-runtime:local
-    user: "helene:helene"
+    user: "g1user:g1user"
     network_mode: host
     restart: "no"
     depends_on:
       ros1_gbplanner:
         condition: service_started
     environment:
-      HOME: /tmp/helene
+      HOME: /tmp/g1user
       ROS_DOMAIN_ID: "0"
       RMW_IMPLEMENTATION: rmw_fastrtps_cpp
       FASTDDS_BUILTIN_TRANSPORTS: UDPv4
