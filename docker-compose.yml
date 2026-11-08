@@ -1,4 +1,4 @@
-name: helene-g1-refactor
+name: g1-autonomy
 
 # Two independent Compose profiles, sharing host networking as in the
 # verified manual setup. No existing helene-g1-* container is changed.
@@ -7,7 +7,7 @@ services:
     # Build Unitree G1 controller from source
   build_g1:
     profiles: [build]
-    image: helene-g1-runtime:local
+    image: g1-runtime:local
     user: "helene:helene"
     network_mode: none
     working_dir: /workspace/unitree_rl_lab/deploy/robots/g1_29dof
@@ -28,7 +28,7 @@ services:
 
   mujoco:
     profiles: [unitree]
-    image: helene-g1-runtime:local
+    image: g1-runtime:local
     build:
       context: .
       dockerfile: docker/g1_runtime/Dockerfile
@@ -66,7 +66,7 @@ services:
 
   g1_ctrl:
     profiles: [unitree]
-    image: helene-g1-runtime:local
+    image: g1-runtime:local
     user: "helene:helene"
     network_mode: host
     gpus: all
@@ -198,7 +198,7 @@ services:
 
   pure_pursuit:
     profiles: [autonomy]
-    image: helene-g1-runtime:local
+    image: g1-runtime:local
     user: "helene:helene"
     network_mode: host
     restart: "no"

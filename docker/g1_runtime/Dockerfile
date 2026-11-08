@@ -1,6 +1,6 @@
 # Preserve the already tested Unitree simulator environment.
 # This is a small runtime layer, not a from-scratch simulator rebuild.
-FROM helene-g1-sim:dev
+FROM g1-sim:dev
 
 SHELL ["/bin/bash", "-c"]
 

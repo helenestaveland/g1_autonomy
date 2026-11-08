@@ -1,5 +1,5 @@
 # Run from ~/g1_autonomy. Uses a NEW Compose project; never acts on old containers.
-COMPOSE := sudo docker compose -p helene-g1-refactor -f docker-compose.yml
+COMPOSE := sudo docker compose -p g1-autonomy -f docker-compose.yml
 ALL := --profile unitree --profile autonomy
 
 .DEFAULT_GOAL := help
