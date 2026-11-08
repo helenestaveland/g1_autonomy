@@ -1,0 +1,65 @@
+--- a/gtsam/CMakeLists.txt
++++ b/gtsam/CMakeLists.txt
+@@ -79,7 +79,9 @@
+       list(APPEND subdir_srcs ${subdir_cuda_srcs})
+     else()
+       file(GLOB_RECURSE subdir_cuda_srcs "${subdir}/cuda/*")
+-      list(REMOVE_ITEM subdir_srcs ${subdir_cuda_srcs})
++      if(subdir_cuda_srcs)
++        list(REMOVE_ITEM subdir_srcs ${subdir_cuda_srcs})
++      endif()
+     endif()
+     list(REMOVE_ITEM subdir_srcs ${excluded_sources})
+ 	file(GLOB subdir_test_files "${subdir}/tests/*")
+--- a/gtsam/base/ProductLieGroup-inl.h
++++ b/gtsam/base/ProductLieGroup-inl.h
+@@ -312,8 +312,8 @@
+ typename traits<T>::TangentVector ProductLieGroup<G, H>::tangentSegment(
+     const TangentVector& v, size_t start, size_t d) {
+   const int startIndex = static_cast<int>(start);
+-  const int runtimeIndex = static_cast<int>(d);
+   if constexpr (Dim == Eigen::Dynamic) {
++    const int runtimeIndex = static_cast<int>(d);
+     return v.segment(startIndex, runtimeIndex);
+   } else {
+     static_cast<void>(d);
+@@ -342,9 +342,9 @@
+ ProductLieGroup<G, H>::makeTangentVector(
+     const typename traits<G>::TangentVector& v1,
+     const typename traits<H>::TangentVector& v2, size_t d1, size_t d2) {
+-  const int firstIndex = static_cast<int>(d1);
+-  const int secondIndex = static_cast<int>(d2);
+   if constexpr (dimension == Eigen::Dynamic) {
++    const int firstIndex = static_cast<int>(d1);
++    const int secondIndex = static_cast<int>(d2);
+     TangentVector v(d1 + d2);
+     v.segment(0, firstIndex) = v1;
+     v.segment(firstIndex, secondIndex) = v2;
+--- a/gtsam/constrained/QpCost.h
++++ b/gtsam/constrained/QpCost.h
+@@ -58,9 +58,7 @@
+    * factor.
+    */
+   explicit QpCost(const GaussianFactor::shared_ptr& factor)
+-      : QpCost(factor ? *factor
+-                      : throw std::invalid_argument(
+-                            "QpCost: shared Gaussian factor is null.")) {}
++      : QpCost(CheckedDeref(factor)) {}
+ 
+   /**
+    * Construct a row-space quadratic cost over direct Vector or Matrix Values.
+@@ -97,6 +95,14 @@
+   }
+ 
+  private:
++  static const GaussianFactor& CheckedDeref(
++      const GaussianFactor::shared_ptr& factor) {
++    if (!factor) {
++      throw std::invalid_argument("QpCost: shared Gaussian factor is null.");
++    }
++    return *factor;
++  }
++
+   HessianFactor::shared_ptr hessianFactor_;
+ };
+ 
