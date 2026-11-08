@@ -1,0 +1,17 @@
+repositories:
+  src/config_utilities:
+    type: git
+    url: git@github.com:ntnu-arl/config_utilities.git
+    version: e8daab7a8b98688f1687b0a4961d53b839127eb4
+  src/gtsam:
+    type: git
+    url: git@github.com:ntnu-arl/gtsam.git
+    version: a00cc205a43b604c4b23adaaa90a6f673505e486
+  src/gtsam_points:
+    type: git
+    url: git@github.com:ntnu-arl/gtsam_points.git
+    version: 7164869d32e7a102ce55875a0e17ccc7c0aa0b5f
+  src/mimosa:
+    type: git
+    url: git@github.com:ntnu-arl/mimosa.git
+    version: 322b89ef1a6ecb3b29007681ce58529e76a12136
