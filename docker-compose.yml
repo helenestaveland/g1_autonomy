@@ -27,16 +27,18 @@ services:
         test -x build/g1_ctrl
 
   mujoco:
+    hostname: "${G1_HOSTNAME}"
     profiles: [unitree]
     image: g1-runtime:local
     build:
       context: .
       dockerfile: docker/g1_runtime/Dockerfile
-    user: "g1user:g1user"
+    user: "${G1_UID}:${G1_GID}"
     network_mode: host
     restart: "no"
     environment:
-      HOME: /tmp/g1user
+      HOME: /tmp
+      XAUTHORITY: /tmp/.Xauthority
       DISPLAY: "${G1_DISPLAY:-${DISPLAY:-:0}}"
       PYTHONPATH: /workspace/MuJoCo-LiDAR/src:/workspace/MuJoCo-LiDAR
       NVIDIA_VISIBLE_DEVICES: all
@@ -48,6 +50,7 @@ services:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ./repos/unitree_mujoco:/workspace/unitree_mujoco:rw
       - ./repos/unitree_rl_lab:/workspace/unitree_rl_lab:rw
+      - ${HOME}/.Xauthority:/tmp/.Xauthority:ro
       - ./repos/MuJoCo-LiDAR:/workspace/MuJoCo-LiDAR:rw
     deploy:
       resources:
@@ -194,7 +197,7 @@ services:
       - |
         source /opt/ros/noetic/setup.bash
         source /workspace/devel/setup.bash
-        exec roslaunch robot_bringup gbplanner_g1_workstation.launch rviz_en:=false
+        exec roslaunch robot_bringup gbplanner_robot.launch rviz_en:=false
 
   pure_pursuit:
     profiles: [autonomy]
@@ -220,15 +223,13 @@ services:
         exec python3 -u /opt/g1/path_tracker_g1.py --ros-args \
           -r path:=/gbplanner_path \
           -r odometry:=/mimosa_node/graph/odometry \
-          -r cmd_vel:=/g1/cmd_vel \
-          -p robot_frame:=mimosa_body \
-          -p desired_vel:=0.50 \
-          -p max_lin_vel:=0.50 \
-          -p max_ang_vel:=0.2
+          -r cmd_vel:=/g1/cmd_vel 
 
   rviz:
     profiles: [autonomy]
     image: unified_autonomy:ros1_gbplanner
+    user: "${G1_UID}:${G1_GID}"
+    hostname: "${G1_HOSTNAME}"
     network_mode: host
     restart: "no"
     depends_on:
@@ -236,14 +237,15 @@ services:
         condition: service_started
     environment:
       DISPLAY: "${G1_DISPLAY:-${DISPLAY:-:0}}"
-      XAUTHORITY: /tmp/Xauthority
+      HOME: /tmp
+      XAUTHORITY: /tmp/.Xauthority
       ROS_MASTER_URI: http://127.0.0.1:11321
       ROS_IP: 127.0.0.1
       NVIDIA_DRIVER_CAPABILITIES: graphics,display,utility,compute
       QT_X11_NO_MITSHM: "1"
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
-      - ${G1_XAUTHORITY:-/run/user/1002/gdm/Xauthority}:/tmp/Xauthority:ro
+      - ${HOME}/.Xauthority:/tmp/.Xauthority:ro
       - ./repos/unified_autonomy_stack/workspaces/ws_gbplanner:/workspace:rw
       - ./repos/unified_autonomy_stack/workspaces/robot_bringup:/workspace/src/robot_bringup:rw
     deploy:
