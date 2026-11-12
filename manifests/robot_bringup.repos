@@ -2,4 +2,4 @@ repositories:
   robot_bringup:
     type: git
     url: https://github.com/helenestaveland/robot_bringup.git
-    version: b541c9296c31ce66b64482d262b3cd56b95442f3
+    version: e46b88314e6e8c9963c629c5db293ac8a18fa885

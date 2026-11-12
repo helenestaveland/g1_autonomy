@@ -19,21 +19,23 @@ class PurePursuitController(Node):
         self.declare_parameters(
             namespace='',
             parameters=[
-                ('critical_angle', 45.0 * math.pi / 180.0),
-                ('curvature_scaling_angle', 45.0 * math.pi / 180.0),
+                ('critical_angle', 60.0 * math.pi / 180.0),
+                ('curvature_scaling_angle', 30.0 * math.pi / 180.0),
                 ('dt', 0.05),
                 ('desired_vel', 0.5),
                 ('max_lin_vel', 0.5),
                 ('min_lin_vel', 0.0),
-                ('max_ang_vel', 0.75),
-                ('min_ang_vel', 0.0),
-                ('max_lin_acc', float('inf')),
-                ('max_lin_dec', float('inf')),
-                ('look_ahead_distance', 1.0),
-                ('look_ahead_error_margin', 0.25),
-                ('goal_reaching_threshold', 0.1),
+                ('max_ang_vel', 0.2),
+                ('min_ang_vel', -0.2),
+                ('max_lin_acc', 1.8),
+                ('max_lin_dec', 1.8),
+                ('max_ang_acc', 0.5),
+                ('stop_lin_dec', 0.5),  # Gentle goal-stop deceleration, m/s^2.
+                ('look_ahead_distance', 0.8),
+                ('look_ahead_error_margin', 0.5),
+                ('goal_reaching_threshold', 0.5),
                 ('fixed_frame', 'map'),
-                ('robot_frame', 'smb_arl/base_link'),
+                ('robot_frame', 'mimosa_body'),
             ]
         )
 
@@ -85,6 +87,12 @@ class PurePursuitController(Node):
         self.min_ang_vel = self.get_parameter('min_ang_vel').value
         self.max_lin_acc = self.get_parameter('max_lin_acc').value
         self.max_lin_dec = self.get_parameter('max_lin_dec').value
+        self.max_ang_acc = self.get_parameter('max_ang_acc').value
+        self.stop_lin_dec = self.get_parameter('stop_lin_dec').value
+        for name in ('max_ang_acc', 'stop_lin_dec'):
+            value = getattr(self, name)
+            if not math.isfinite(value) or value <= 0.0:
+                raise ValueError(f'{name} must be finite and greater than zero')
         self.look_ahead_distance = self.get_parameter('look_ahead_distance').value
         self.look_ahead_error_margin = self.get_parameter('look_ahead_error_margin').value
         self.goal_reaching_threshold = self.get_parameter('goal_reaching_threshold').value
@@ -119,6 +127,8 @@ class PurePursuitController(Node):
         # print('Control loop iteration')
         # Check if path is empty
         if len(self.path_to_exec) <= 0:
+            # Finish braking and keep refreshing the stopped command.
+            self.stop_robot()
             return
 
         # Check if goal is reached
@@ -126,24 +136,86 @@ class PurePursuitController(Node):
         # print('current pose:', self.current_pose.position)
         # print('distance to goal:', self.calculate_distance(self.path_to_exec[-1].pose, self.current_pose), 'goal threshold:', self.goal_reaching_threshold)
         if self.calculate_distance(self.path_to_exec[-1].pose, self.current_pose) < self.goal_reaching_threshold:
-            self.get_logger().info('Reached end of path')
-            self.stop_robot()
+            self.get_logger().info('Reached goal tolerance; braking to a stop')
             self.path_to_exec = []
+            self.stop_robot()
             return
         # print('calculated distance to goal')
 
         # Compute and publish velocity command
         if self.compute_command_velocity():
+            # Enforce forward-only operation and maximum forward speed.
+            self.cmd_vel.linear.x = max(
+                0.0, min(self.cmd_vel.linear.x, self.max_lin_vel)
+            )
+            target_vx = self.cmd_vel.linear.x
+            previous_vx = getattr(self, "_last_cmd_vx", 0.0)
+
+            if target_vx == 0.0:
+                # Stop immediately when rotation in place is required.
+                limited_vx = 0.0
+            else:
+                # Limit acceleration and deceleration.
+                rate = (self.max_lin_acc if target_vx > previous_vx
+                        else self.max_lin_dec)
+                max_change = rate * self.dt
+                limited_vx = previous_vx + max(
+                    -max_change,
+                    min(max_change, target_vx - previous_vx)
+                )
+
+            self.cmd_vel.linear.x = limited_vx
+            self._last_cmd_vx = limited_vx
+
+            # Limit angular acceleration to prevent oscillating commands.
+            target_wz = max(
+                -self.max_ang_vel,
+                min(self.max_ang_vel, self.cmd_vel.angular.z)
+            )
+            previous_wz = getattr(self, "_last_cmd_wz", 0.0)
+
+            max_change = self.max_ang_acc * self.dt
+
+            limited_wz = previous_wz + max(
+                -max_change,
+                min(max_change, target_wz - previous_wz)
+            )
+
+            self.cmd_vel.angular.z = limited_wz
+            self._last_cmd_wz = limited_wz
+
             self.cmd_vel_pub.publish(self.cmd_vel)
         else:
             self.get_logger().warn("Can't track given path")
+            self.stop_robot(immediate=True)
 
-    def stop_robot(self):
-        """Publish zero velocity command"""
+    def stop_robot(self, immediate=False):
+        """Brake over successive timer ticks; stop immediately on tracking failure."""
         vel = Twist()
-        vel.linear.x = 0.0
-        vel.angular.z = 0.0
+        if not immediate:
+            previous_vx = getattr(self, '_last_cmd_vx', 0.0)
+            previous_wz = getattr(self, '_last_cmd_wz', 0.0)
+
+            # Scale both commands together to preserve the turning radius
+            # while braking, avoiding a final turn in place.
+            fraction = 1.0
+            if previous_vx != 0.0:
+                deceleration = min(self.max_lin_dec, self.stop_lin_dec)
+                fraction = min(
+                    fraction, deceleration * self.dt / abs(previous_vx)
+                )
+            if previous_wz != 0.0:
+                fraction = min(
+                    fraction, self.max_ang_acc * self.dt / abs(previous_wz)
+                )
+
+            scale = max(0.0, 1.0 - fraction)
+            vel.linear.x = previous_vx * scale
+            vel.angular.z = previous_wz * scale
+
         self.cmd_vel = vel
+        self._last_cmd_vx = vel.linear.x
+        self._last_cmd_wz = vel.angular.z
         self.cmd_vel_pub.publish(self.cmd_vel)
 
     def compute_command_velocity(self):
@@ -266,14 +338,9 @@ class PurePursuitController(Node):
         carrot_y = carrot_waypoint_robot.position.y
         # print('15')
 
-        lin_vel_sign = 1 if carrot_x >= 0 else -1
+        # Forward-only: rotate toward waypoints behind the robot.
+        lin_vel_sign = 1
         delta_theta = math.atan2(carrot_y, carrot_x)
-
-        if lin_vel_sign < 0:
-            if delta_theta > 0:
-                delta_theta -= math.pi
-            else:
-                delta_theta += math.pi
 
         ang_vel_sign = 1 if delta_theta >= 0 else -1
 
@@ -284,8 +351,8 @@ class PurePursuitController(Node):
 
         if abs(delta_theta) >= self.critical_angle:
             # Case 1: Rotate in place
-            self.cmd_vel.linear.x = 0.0
-            self.cmd_vel.angular.z = self.max_ang_vel * ang_vel_sign
+            self.cmd_vel.linear.x = 0.23
+            self.cmd_vel.angular.z = (self.max_ang_vel) * ang_vel_sign
         elif abs(delta_theta) >= self.curvature_scaling_angle:
             # Case 2: Curvature scaled velocity
             self.cmd_vel.linear.x = lin_vel_sign * self.desired_vel * (radius / radius_min)
@@ -299,7 +366,7 @@ class PurePursuitController(Node):
             self.cmd_vel.angular.z = ang_vel_sign * abs(self.cmd_vel.linear.x) / radius
             if abs(self.cmd_vel.angular.z) > self.max_ang_vel:
                 self.cmd_vel.angular.z = ang_vel_sign * self.max_ang_vel
-            self.cmd_vel.linear.x *= ((r - radius_min) / (radius_max - radius_min))
+            self.cmd_vel.linear.x *= max(0.0, (r - radius_min) / (radius_max - radius_min))
 
         return True
 
