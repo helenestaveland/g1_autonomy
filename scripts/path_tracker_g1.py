@@ -33,9 +33,9 @@ class PurePursuitController(Node):
                 ('stop_lin_dec', 0.5),  # Gentle goal-stop deceleration, m/s^2.
                 ('look_ahead_distance', 0.8),
                 ('look_ahead_error_margin', 0.5),
-                ('goal_reaching_threshold', 0.5),
-                ('fixed_frame', 'map'),
-                ('robot_frame', 'mimosa_body'),
+                ('goal_reaching_threshold', 1.0),
+                ('fixed_frame', 'world'),
+                ('robot_frame', 'g1/base_link'),
             ]
         )
 
