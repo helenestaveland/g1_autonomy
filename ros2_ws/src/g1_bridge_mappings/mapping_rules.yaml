@@ -1,0 +1,16 @@
+- enable_foreign_mappings: true
+  ros1_package_name: grid_map_msgs
+  ros1_message_name: GridMap
+  ros2_package_name: grid_map_msgs
+  ros2_message_name: GridMap
+  fields_1_to_2:
+    info.header: header
+    info.resolution: info.resolution
+    info.length_x: info.length_x
+    info.length_y: info.length_y
+    info.pose: info.pose
+    layers: layers
+    basic_layers: basic_layers
+    data: data
+    outer_start_index: outer_start_index
+    inner_start_index: inner_start_index

@@ -1,0 +1,243 @@
+diff --git a/src/bridge.cpp b/src/bridge.cpp
+--- a/src/bridge.cpp
++++ b/src/bridge.cpp
+@@ -12,8 +12,18 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
++#include <functional>
++#include <map>
++#include <memory>
++#include <mutex>
++#include <stdexcept>
+ #include <string>
+ 
++#include "geometry_msgs/TransformStamped.h"
++#include "rmw/rmw.h"
++#include "tf2_msgs/TFMessage.h"
++#include "tf2_msgs/msg/tf_message.hpp"
++
+ #include "ros1_bridge/bridge.hpp"
+ 
+ 
+@@ -104,11 +114,96 @@ create_bridge_from_2_to_1(
+   rclcpp::PublisherBase::SharedPtr ros2_pub)
+ {
+   auto factory = get_factory(ros1_type_name, ros2_type_name);
++  std::string resolved_ros1_type_name = ros1_type_name;
++  if (resolved_ros1_type_name.empty()) {
++    get_2to1_mapping(ros2_type_name, resolved_ros1_type_name);
++  }
++  const bool latch =
++    subscriber_qos.get_rmw_qos_profile().durability ==
++    RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL;
+   auto ros1_pub = factory->create_ros1_publisher(
+-    ros1_node, ros1_topic_name, publisher_queue_size);
++    ros1_node, ros1_topic_name, publisher_queue_size, latch);
+ 
+-  auto ros2_sub = factory->create_ros2_subscriber(
+-    ros2_node, ros2_topic_name, subscriber_qos, ros1_pub, ros2_pub);
++  rclcpp::SubscriptionBase::SharedPtr ros2_sub;
++  const bool aggregate_tf_static =
++    latch &&
++    ros2_topic_name == "/tf_static" &&
++    ros1_topic_name == "/tf_static" &&
++    ros2_type_name == "tf2_msgs/msg/TFMessage" &&
++    resolved_ros1_type_name == "tf2_msgs/TFMessage";
++
++  if (aggregate_tf_static) {
++    using TransformCache = std::map<std::string, geometry_msgs::TransformStamped>;
++    auto transform_cache = std::make_shared<TransformCache>();
++    auto cache_mutex = std::make_shared<std::mutex>();
++    auto logger = ros2_node->get_logger();
++
++    std::function<void(
++      tf2_msgs::msg::TFMessage::ConstSharedPtr,
++      const rclcpp::MessageInfo &)> callback =
++      [factory, ros1_pub, ros2_pub, transform_cache, cache_mutex, logger](
++      tf2_msgs::msg::TFMessage::ConstSharedPtr ros2_msg,
++      const rclcpp::MessageInfo & msg_info) mutable
++      {
++        if (ros2_pub) {
++          bool gids_equal = false;
++          auto ret = rmw_compare_gids_equal(
++            &msg_info.get_rmw_message_info().publisher_gid,
++            &ros2_pub->get_gid(),
++            &gids_equal);
++          if (ret != RMW_RET_OK) {
++            auto error = std::string("Failed to compare gids: ") + rmw_get_error_string().str;
++            rmw_reset_error();
++            throw std::runtime_error(error);
++          }
++          if (gids_equal) {
++            return;
++          }
++        }
++
++        void * ros1_pub_handle = ros1_pub;
++        if (ros1_pub_handle == nullptr) {
++          RCLCPP_WARN_ONCE(logger, "Unable to publish aggregated /tf_static to ROS 1");
++          return;
++        }
++
++        tf2_msgs::TFMessage converted;
++        factory->convert_2_to_1(ros2_msg.get(), &converted);
++
++        tf2_msgs::TFMessage aggregate;
++        {
++          std::lock_guard<std::mutex> lock(*cache_mutex);
++          bool cache_updated = false;
++          for (const auto & transform : converted.transforms) {
++            if (transform.child_frame_id.empty()) {
++              continue;
++            }
++            (*transform_cache)[transform.child_frame_id] = transform;
++            cache_updated = true;
++          }
++          if (!cache_updated) {
++            return;
++          }
++          aggregate.transforms.reserve(transform_cache->size());
++          for (const auto & cached_transform : *transform_cache) {
++            aggregate.transforms.push_back(cached_transform.second);
++          }
++
++          RCLCPP_INFO_ONCE(
++            logger,
++            "Passing deterministic aggregated /tf_static from ROS 2 to ROS 1");
++          ros1_pub.publish(aggregate);
++        }
++      };
++
++    rclcpp::SubscriptionOptions options;
++    options.ignore_local_publications = true;
++    ros2_sub = ros2_node->create_subscription<tf2_msgs::msg::TFMessage>(
++      ros2_topic_name, subscriber_qos, callback, options);
++  } else {
++    ros2_sub = factory->create_ros2_subscriber(
++      ros2_node, ros2_topic_name, subscriber_qos, ros1_pub, ros2_pub);
++  }
+ 
+   Bridge2to1Handles handles;
+   handles.ros2_subscriber = ros2_sub;
+@@ -158,7 +253,7 @@ create_bidirectional_bridge(
+     ros1_type_name, topic_name, queue_size, ros2_type_name, topic_name, publisher_qos);
+   handles.bridge2to1 = create_bridge_from_2_to_1(
+     ros2_node, ros1_node,
+-    ros2_type_name, topic_name, queue_size, ros1_type_name, topic_name, queue_size,
++    ros2_type_name, topic_name, publisher_qos, ros1_type_name, topic_name, queue_size,
+     handles.bridge1to2.ros2_publisher);
+   return handles;
+ }
+diff --git a/src/parameter_bridge.cpp b/src/parameter_bridge.cpp
+--- a/src/parameter_bridge.cpp
++++ b/src/parameter_bridge.cpp
+@@ -238,6 +238,7 @@ int main(int argc, char * argv[])
+   // ROS 2 node
+   rclcpp::init(argc, argv);
+   auto ros2_node = rclcpp::Node::make_shared("ros_bridge");
++  auto ros2_service_node = rclcpp::Node::make_shared("ros_bridge_services");
+ 
+   std::list<ros1_bridge::BridgeHandles> all_handles;
+   std::list<ros1_bridge::ServiceBridge1to2> service_bridges_1_to_2;
+@@ -355,7 +356,7 @@ int main(int argc, char * argv[])
+         try {
+           service_bridges_1_to_2.push_back(
+             factory->service_bridge_1_to_2(
+-              ros1_node, ros2_node, service_name, service_execution_timeout));
++              ros1_node, ros2_service_node, service_name, service_execution_timeout));
+           printf("Created 1 to 2 bridge for service %s\n", service_name.c_str());
+         } catch (std::runtime_error & e) {
+           fprintf(
+@@ -417,7 +418,8 @@ int main(int argc, char * argv[])
+       if (factory) {
+         try {
+           service_bridges_2_to_1.push_back(
+-            factory->service_bridge_2_to_1(ros1_node, ros2_node, service_name));
++            factory->service_bridge_2_to_1(
++              ros1_node, ros2_service_node, service_name));
+           printf("Created 2 to 1 bridge for service %s\n", service_name.c_str());
+         } catch (std::runtime_error & e) {
+           fprintf(
+@@ -444,11 +446,24 @@ int main(int argc, char * argv[])
+   ros::AsyncSpinner async_spinner(1);
+   async_spinner.start();
+ 
+-  // ROS 2 spinning loop
+-  rclcpp::executors::SingleThreadedExecutor executor;
+-  while (ros1_node.ok() && rclcpp::ok()) {
+-    executor.spin_node_once(ros2_node, std::chrono::milliseconds(1000));
+-  }
++  // Keep blocking ROS 1 service calls off the topic callback group. In
++  // particular, /clock must continue advancing while a simulated-time ROS 1
++  // service server waits for its next spinOnce() iteration.
++  auto ros1_shutdown_timer = ros2_node->create_wall_timer(
++    std::chrono::seconds(1),
++    [&ros1_node]() {
++      if (!ros1_node.ok()) {
++        rclcpp::shutdown();
++      }
++    });
++  (void)ros1_shutdown_timer;
++  RCLCPP_INFO(
++    ros2_node->get_logger(),
++    "Spinning ROS 2 topic and service nodes with 2 executor threads");
++  rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 2);
++  executor.add_node(ros2_node);
++  executor.add_node(ros2_service_node);
++  executor.spin();
+ 
+   return 0;
+ }
+diff --git a/include/ros1_bridge/factory.hpp b/include/ros1_bridge/factory.hpp
+--- a/include/ros1_bridge/factory.hpp
++++ b/include/ros1_bridge/factory.hpp
+@@ -15,6 +15,7 @@
+ #ifndef  ROS1_BRIDGE__FACTORY_HPP_
+ #define  ROS1_BRIDGE__FACTORY_HPP_
+ 
++#include <chrono>
+ #include <functional>
+ #include <memory>
+ #include <string>
+@@ -400,17 +401,38 @@ public:
+   using ROS1Response = typename ROS1_T::Response;
+   using ROS2Response = typename ROS2_T::Response;
+ 
+   void forward_2_to_1(
+-    ros::ServiceClient client, rclcpp::Logger logger, const std::shared_ptr<rmw_request_id_t>,
++    ros::ServiceClient client, rclcpp::Logger logger,
++    const std::shared_ptr<rmw_request_id_t> request_header,
+     const std::shared_ptr<ROS2Request> request, std::shared_ptr<ROS2Response> response)
+   {
++    const auto started_at = std::chrono::steady_clock::now();
++    const auto sequence_number =
++      request_header ? request_header->sequence_number : -1;
++    RCLCPP_INFO(
++      logger, "Forwarding ROS 2 request %lld to ROS 1 service %s",
++      static_cast<long long>(sequence_number), client.getService().c_str());
++
+     ROS1_T srv;
+     translate_2_to_1(*request, srv.request);
+     if (client.call(srv)) {
+       translate_1_to_2(srv.response, *response);
++      const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
++        std::chrono::steady_clock::now() - started_at).count();
++      RCLCPP_INFO(
++        logger, "Completed ROS 1 service %s for request %lld in %lld ms",
++        client.getService().c_str(), static_cast<long long>(sequence_number),
++        static_cast<long long>(elapsed_ms));
+     } else {
+-      throw std::runtime_error("Failed to get response from ROS 1 service " + client.getService());
++      const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
++        std::chrono::steady_clock::now() - started_at).count();
++      RCLCPP_ERROR(
++        logger,
++        "Failed to get response from ROS 1 service %s for request %lld after %lld ms; "
++        "returning a default response",
++        client.getService().c_str(), static_cast<long long>(sequence_number),
++        static_cast<long long>(elapsed_ms));
+     }
+   }
+ 
+   bool forward_1_to_2(

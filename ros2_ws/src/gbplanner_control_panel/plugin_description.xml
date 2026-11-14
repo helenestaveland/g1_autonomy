@@ -1,0 +1,8 @@
+<library path="gbplanner_control_panel">
+  <class
+    name="gbplanner_control_panel/GbplannerControlPanel"
+    type="gbplanner_control_panel::GbplannerControlPanel"
+    base_class_type="rviz_common::Panel">
+    <description>Control the bridged GBPlanner services and monitor planning results.</description>
+  </class>
+</library>

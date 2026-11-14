@@ -1,0 +1,186 @@
+# ROS 1/ROS 2 transport used by the upstream planner and UAV simulator.
+# __UAV_NAME__ is rendered by bridge_params before rosparam loads this file.
+topics:
+  - topic: /tf
+    type: tf2_msgs/msg/TFMessage
+    queue_size: 100
+  - topic: /tf_static
+    type: tf2_msgs/msg/TFMessage
+    queue_size: 100
+    qos: {history: keep_last, depth: 100, reliability: reliable, durability: transient_local}
+  - topic: /mujoco/ground_truth
+    type: nav_msgs/msg/Odometry
+    queue_size: 20
+    qos: {reliability: best_effort}
+  - topic: /rslidar_points
+    type: sensor_msgs/msg/PointCloud2
+    queue_size: 5
+    qos: {reliability: best_effort}
+  - topic: /gbplanner_path
+    type: nav_msgs/msg/Path
+    queue_size: 10
+  # GBPlanner visualization topics shown in the operator RViz layout.
+  - topic: /gbplanner_status
+    type: std_msgs/msg/Bool
+    queue_size: 5
+  - topic: /gbplanner/go_to_waypoint_pose_visualization
+    type: visualization_msgs/msg/Marker
+    queue_size: 5
+  - topic: /gbplanner_node/occupied_nodes
+    type: visualization_msgs/msg/MarkerArray
+    queue_size: 5
+  - topic: /gbplanner_node/surface_pointcloud
+    type: sensor_msgs/msg/PointCloud2
+    queue_size: 2
+    qos: {reliability: best_effort}
+  - topic: /gbplanner_node/esdf_surface_pointcloud
+    type: sensor_msgs/msg/PointCloud2
+    queue_size: 2
+    qos: {reliability: best_effort}
+  - topic: /gbplanner_node/tsdf_pointcloud
+    type: sensor_msgs/msg/PointCloud2
+    queue_size: 2
+    qos: {reliability: best_effort}
+  - topic: /pci_carrot
+    type: geometry_msgs/msg/PoseStamped
+    queue_size: 5
+  - topic: /pci_command_trajectory_vis
+    type: visualization_msgs/msg/MarkerArray
+    queue_size: 5
+  - topic: /vis/planning_workspace
+    type: visualization_msgs/msg/MarkerArray
+    queue_size: 5
+  - topic: /vis/robot_state
+    type: visualization_msgs/msg/MarkerArray
+    queue_size: 5
+  - topic: /vis/sampler
+    type: visualization_msgs/msg/MarkerArray
+    queue_size: 5
+  - topic: /vis/planning_graph
+    type: visualization_msgs/msg/MarkerArray
+    queue_size: 5
+  - topic: /vis/planning_projected_graph
+    type: visualization_msgs/msg/MarkerArray
+    queue_size: 5
+  - topic: /vis/planning_global_graph
+    type: visualization_msgs/msg/MarkerArray
+    queue_size: 5
+  - topic: /vis/shortest_paths
+    type: visualization_msgs/msg/MarkerArray
+    queue_size: 5
+  - topic: /vis/best_planning_paths
+    type: visualization_msgs/msg/MarkerArray
+    queue_size: 5
+  - topic: /vis/ref_path
+    type: visualization_msgs/msg/MarkerArray
+    queue_size: 5
+  - topic: /vis/imp_ref_path
+    type: visualization_msgs/msg/MarkerArray
+    queue_size: 5
+  - topic: /vis/planning_homing_path
+    type: visualization_msgs/msg/MarkerArray
+    queue_size: 5
+  - topic: /vis/planning_global_path
+    type: visualization_msgs/msg/MarkerArray
+    queue_size: 5
+  - topic: /vis/sensor_fov
+    type: visualization_msgs/msg/MarkerArray
+    queue_size: 5
+  - topic: /vis/planning_failed
+    type: visualization_msgs/msg/MarkerArray
+    queue_size: 5
+  - topic: /vis/volumetric_gains
+    type: visualization_msgs/msg/MarkerArray
+    queue_size: 5
+  - topic: /vis/ray_casting
+    type: visualization_msgs/msg/MarkerArray
+    queue_size: 5
+  - topic: /vis/shortest_path_clustering
+    type: visualization_msgs/msg/MarkerArray
+    queue_size: 5
+  - topic: /vis/state_history
+    type: visualization_msgs/msg/MarkerArray
+    queue_size: 5
+  - topic: /vis/no_gain_zone
+    type: visualization_msgs/msg/MarkerArray
+    queue_size: 5
+  - topic: /vis/geofence
+    type: visualization_msgs/msg/MarkerArray
+    queue_size: 5
+  - topic: /vis/negative_edges
+    type: visualization_msgs/msg/MarkerArray
+    queue_size: 5
+  - topic: /vis/hyperplanes
+    type: visualization_msgs/msg/MarkerArray
+    queue_size: 5
+  - topic: /vis/mod_path
+    type: visualization_msgs/msg/MarkerArray
+    queue_size: 5
+  - topic: /vis/blind_mod_path
+    type: visualization_msgs/msg/MarkerArray
+    queue_size: 5
+  - topic: /vis/alternate_path
+    type: visualization_msgs/msg/MarkerArray
+    queue_size: 5
+  - topic: /vis/occupied_pcl
+    type: sensor_msgs/msg/PointCloud2
+    queue_size: 2
+    qos: {reliability: best_effort}
+  - topic: /vis/graph_vertices
+    type: visualization_msgs/msg/MarkerArray
+    queue_size: 5
+  - topic: /vis/opening_traversal_path
+    type: visualization_msgs/msg/MarkerArray
+    queue_size: 5
+  - topic: /vis/viewpoints
+    type: geometry_msgs/msg/PoseArray
+    queue_size: 5
+  - topic: /gbplanner/local_target_viz
+    type: geometry_msgs/msg/PointStamped
+    queue_size: 5
+  - topic: /freespace_pointcloud
+    type: sensor_msgs/msg/PointCloud2
+    queue_size: 2
+    qos: {reliability: best_effort}
+  - topic: /stable_detections_vis
+    type: geometry_msgs/msg/PoseArray
+    queue_size: 5
+  - topic: /contour_img
+    type: sensor_msgs/msg/Image
+    queue_size: 2
+    qos: {reliability: best_effort}
+  - topic: /contour_pcl
+    type: sensor_msgs/msg/PointCloud2
+    queue_size: 2
+    qos: {reliability: best_effort}
+  - topic: /contour_centroids
+    type: geometry_msgs/msg/PoseArray
+    queue_size: 5
+  - topic: /command_traj_vis
+    type: nav_msgs/msg/Path
+    queue_size: 5
+  - topic: /planner_control_interface/stop_request
+    type: std_msgs/msg/Bool
+    queue_size: 10
+  - topic: /move_base_simple/goal
+    type: geometry_msgs/msg/PoseStamped
+    queue_size: 10
+  - topic: /elevation_mapping_lidar/elevation_map_raw
+    type: grid_map_msgs/msg/GridMap
+    queue_size: 1
+    qos:
+      history: keep_last
+      depth: 1
+      reliability: reliable
+      durability: transient_local
+services_1_to_2: []
+# ROS 2 RViz clients call ROS 1 planner servers. Types are ROS 1 names.
+services_2_to_1:
+  - {service: /planner_control_interface/std_srvs/automatic_planning, type: std_srvs/Trigger}
+  - {service: /planner_control_interface/std_srvs/single_planning, type: std_srvs/Trigger}
+  - {service: /planner_control_interface/std_srvs/stop, type: std_srvs/Trigger}
+  - {service: /planner_control_interface/std_srvs/homing_trigger, type: std_srvs/Trigger}
+  - {service: /planner_control_interface/std_srvs/go_to_waypoint, type: std_srvs/Trigger}
+  - {service: /gbplanner/switch_operation_mode, type: std_srvs/SetBool}
+  - {service: /pci_initialization_trigger, type: planner_msgs/pci_initialization}
+  - {service: /pci_global, type: planner_msgs/pci_global}

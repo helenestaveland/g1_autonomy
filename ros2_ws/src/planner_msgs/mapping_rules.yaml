@@ -1,0 +1,8 @@
+- ros1_package_name: planner_msgs
+  ros1_service_name: pci_initialization
+  ros2_package_name: planner_msgs
+  ros2_service_name: PciInitialization
+- ros1_package_name: planner_msgs
+  ros1_service_name: pci_global
+  ros2_package_name: planner_msgs
+  ros2_service_name: PciGlobal

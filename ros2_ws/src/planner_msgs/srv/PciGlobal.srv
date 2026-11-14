@@ -1,0 +1,10 @@
+# Mirrors the Noetic planner_msgs/pci_global request and response.
+bool not_exe_path
+bool set_auto
+uint8 bound_mode
+float32 vel_max
+int32 id
+bool not_check_frontier
+bool ignore_time
+---
+bool success
