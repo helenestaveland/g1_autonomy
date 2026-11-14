@@ -8,11 +8,11 @@ services:
   build_g1:
     profiles: [build]
     image: g1-runtime:local
-    user: "g1user:g1user"
+    user: "${G1_UID}:${G1_GID}"
     network_mode: none
     working_dir: /workspace/unitree_rl_lab/deploy/robots/g1_29dof
     environment:
-      HOME: /tmp/g1user
+      HOME: /tmp
       G1_BUILD_JOBS: "${G1_BUILD_JOBS:-4}"
     volumes:
       - ./repos/unitree_rl_lab:/workspace/unitree_rl_lab:rw
@@ -125,9 +125,9 @@ services:
       retries: 20
       start_period: 3s
 
-  ros2_bridge:
+  bridge_params:
     profiles: [autonomy]
-    image: unified_autonomy:ros1-bridge-builder
+    image: unified_autonomy:ros1_base
     network_mode: host
     restart: "no"
     depends_on:
@@ -136,19 +136,46 @@ services:
     environment:
       ROS_MASTER_URI: http://127.0.0.1:11321
       ROS_IP: 127.0.0.1
+    volumes:
+      - ./config/bridge/gbplanner.yaml:/config/gbplanner.yaml:ro
+    command:
+      - bash
+      - -lc
+      - |
+        source /opt/ros/noetic/setup.bash
+        exec rosparam load /config/gbplanner.yaml /g1_bridge
+
+  ros2_bridge:
+    profiles: [autonomy]
+    image: g1-gbplanner-bridge:humble
+    network_mode: host
+    restart: "no"
+    depends_on:
+      ros1_master:
+        condition: service_healthy
+      bridge_params:
+        condition: service_completed_successfully
+    environment:
+      ROS_MASTER_URI: http://127.0.0.1:11321
+      ROS_IP: 127.0.0.1
       ROS_DOMAIN_ID: "0"
       ROS_LOCALHOST_ONLY: "0"
+      RMW_IMPLEMENTATION: rmw_fastrtps_cpp
       FASTDDS_BUILTIN_TRANSPORTS: UDPv4
     command:
       - bash
       - -lc
       - |
         source /opt/ros/humble/setup.bash
-        source /ws_ros1_bridge/install/setup.bash
-        exec ros2 run ros1_bridge dynamic_bridge --bridge-all-2to1-topics
+        source /g1_interfaces/ros2_ws/install/local_setup.bash
+        source /ws_g1_bridge/install/local_setup.bash
+        exec ros2 run ros1_bridge parameter_bridge \
+          /g1_bridge/topics \
+          /g1_bridge/services_1_to_2 \
+          /g1_bridge/services_2_to_1
 
   ros1_mimosa:
-    profiles: [autonomy]
+    profiles: [slam]
     image: unified_autonomy:ros1_base
     network_mode: host
     restart: "no"
@@ -183,8 +210,10 @@ services:
     network_mode: host
     restart: "no"
     depends_on:
-      ros1_mimosa:
+      ros1_master:
         condition: service_healthy
+      ros2_bridge:
+        condition: service_started
     environment:
       ROS_MASTER_URI: http://127.0.0.1:11321
       ROS_IP: 127.0.0.1
@@ -197,7 +226,12 @@ services:
       - |
         source /opt/ros/noetic/setup.bash
         source /workspace/devel/setup.bash
-        exec roslaunch robot_bringup gbplanner_robot.launch rviz_en:=false
+        exec roslaunch robot_bringup gbplanner_sim.launch \
+          robot_name:=g1 \
+          config_name:=g1_sim \
+          odometry_topic:=/mujoco/ground_truth \
+          ele_map_enable:=true \
+          rviz_en:=false
 
   pure_pursuit:
     profiles: [autonomy]
@@ -222,11 +256,34 @@ services:
         source /opt/ros/humble/setup.bash
         exec python3 -u /opt/g1/path_tracker_g1.py --ros-args \
           -r path:=/gbplanner_path \
-          -r odometry:=/mimosa_node/graph/odometry \
+          -r odometry:=/mujoco/ground_truth \
           -r cmd_vel:=/g1/cmd_vel 
 
-  rviz:
+  gbplanner_marker_relay:
     profiles: [autonomy]
+    image: g1-rviz2:local
+    network_mode: host
+    restart: "no"
+    depends_on:
+      ros2_bridge:
+        condition: service_started
+    environment:
+      ROS_DOMAIN_ID: "0"
+      ROS_LOCALHOST_ONLY: "0"
+      RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+      FASTDDS_BUILTIN_TRANSPORTS: UDPv4
+    volumes:
+      - ./scripts/normalize_visualization_markers.py:/opt/g1/normalize_visualization_markers.py:ro
+    command:
+      - bash
+      - -lc
+      - |
+        source /opt/ros/humble/setup.bash
+        source /opt/g1_ros2_ws/install/local_setup.bash
+        exec python3 /opt/g1/normalize_visualization_markers.py
+
+  rviz:
+    profiles: [legacy_rviz]
     image: unified_autonomy:ros1_gbplanner
     user: "${G1_UID}:${G1_GID}"
     hostname: "${G1_HOSTNAME}"
@@ -241,7 +298,7 @@ services:
       XAUTHORITY: /tmp/.Xauthority
       ROS_MASTER_URI: http://127.0.0.1:11321
       ROS_IP: 127.0.0.1
-      NVIDIA_DRIVER_CAPABILITIES: graphics,display,utility,compute
+      NVIDIA_DRIVER_CAPABILITIES: graphics,display,utility,computed
       QT_X11_NO_MITSHM: "1"
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
@@ -262,3 +319,41 @@ services:
         source /opt/ros/noetic/setup.bash
         source /workspace/devel/setup.bash
         exec rviz -d /workspace/src/robot_bringup/rviz/ros1/rmf.rviz
+
+  rviz2:
+    profiles: [autonomy]
+    image: g1-rviz2:local
+    build:
+      context: .
+      dockerfile: config/rviz/Dockerfile
+    user: "${G1_UID}:${G1_GID}"
+    network_mode: host
+    restart: "no"
+    environment:
+      DISPLAY: "${G1_DISPLAY:-${DISPLAY:-:0}}"
+      HOME: /tmp
+      XAUTHORITY: /tmp/.Xauthority
+      ROS_DOMAIN_ID: "0"
+      ROS_LOCALHOST_ONLY: "0"
+      RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+      FASTDDS_BUILTIN_TRANSPORTS: UDPv4
+      QT_X11_NO_MITSHM: "1"
+      NVIDIA_DRIVER_CAPABILITIES: graphics,display,utility,compute
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${HOME}/.Xauthority:/tmp/.Xauthority:ro
+      - ./config/rviz:/config:rw
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    command:
+      - bash
+      - -lc
+      - |
+        source /opt/ros/humble/setup.bash
+        source /opt/g1_ros2_ws/install/local_setup.bash
+        exec ros2 run rviz2 rviz2 -d /config/g1_ros2.rviz
