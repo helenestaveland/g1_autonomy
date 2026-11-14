@@ -10,7 +10,7 @@ repositories:
   src/exploration/gbplanner_ros:
     type: git
     url: https://github.com/helenestaveland/gbplanner_ros.git
-    version: 493759dfdad9efe33507552aa0314b821461aef4
+    version: f76747529d14b18619ceacb535d8b12fba34d369
   src/exploration/manhole_detector_ros:
     type: git
     url: git@github.com:ntnu-arl/manhole_detector_ros.git
