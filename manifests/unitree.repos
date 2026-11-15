@@ -2,4 +2,4 @@ repositories:
   unitree_rl_lab:
     type: git
     url: https://github.com/helenestaveland/unitree_rl_lab.git
-    version: 0800deb088f88604556a93d4152f8cf0562ac778
+    version: 98d80fe7aaa944356828e59db3d841b55a6b4ee5

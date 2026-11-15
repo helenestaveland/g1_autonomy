@@ -2,7 +2,7 @@ repositories:
   unitree_mujoco:
     type: git
     url: https://github.com/helenestaveland/unitree_mujoco.git
-    version: 96c4b9692ed85137667eddd2f5440e3a359ab58b
+    version: facff60d23348be97efc73397e282e39dc6e21a2
 
   MuJoCo-LiDAR:
     type: git
