@@ -2,13 +2,13 @@
 
 import rclpy
 from rclpy.node import Node
-import numpy as np
 import math
 from geometry_msgs.msg import Twist, PoseStamped, Pose
 from nav_msgs.msg import Odometry, Path
 from tf2_ros import TransformListener, Buffer
 from tf2_geometry_msgs import do_transform_pose
-import copy
+import time
+
 
 
 class PurePursuitController(Node):
@@ -19,21 +19,18 @@ class PurePursuitController(Node):
         self.declare_parameters(
             namespace='',
             parameters=[
-                ('critical_angle', 60.0 * math.pi / 180.0),
-                ('curvature_scaling_angle', 30.0 * math.pi / 180.0),
                 ('dt', 0.05),
-                ('desired_vel', 0.5),
-                ('max_lin_vel', 0.5),
-                ('min_lin_vel', 0.0),
-                ('max_ang_vel', 0.2),
-                ('min_ang_vel', -0.2),
+                ('desired_vel', 1.0),
+                ('max_lin_vel', 1.0),
+                ('max_ang_vel', 1.0),
                 ('max_lin_acc', 1.8),
                 ('max_lin_dec', 1.8),
-                ('max_ang_acc', 0.5),
-                ('stop_lin_dec', 0.5),  # Gentle goal-stop deceleration, m/s^2.
-                ('look_ahead_distance', 0.8),
-                ('look_ahead_error_margin', 0.5),
-                ('goal_reaching_threshold', 1.0),
+                ('max_ang_acc', 10.0),
+                ('stop_lin_dec', 0.5),
+                ('goal_reaching_threshold', 0.15),
+                ('waypoint_reaching_threshold', 0.30),
+                ('turn_enter_angle', math.radians(15.0)),
+                ('turn_exit_angle', math.radians(5.0)),
                 ('fixed_frame', 'world'),
                 ('robot_frame', 'g1/base_link'),
             ]
@@ -46,6 +43,9 @@ class PurePursuitController(Node):
         self.current_pose = Pose()
         self.current_vel = Twist()
         self.cmd_vel = Twist()
+        self._advance_after_stop = False
+        self._settle_until = 0.0
+        self._turning = False
 
         # Publishers
         self.cmd_vel_pub = self.create_publisher(Twist, 'cmd_vel', 10)
@@ -76,28 +76,13 @@ class PurePursuitController(Node):
         self.get_logger().info('Pure Pursuit Controller initialized')
 
     def load_params(self):
-        """Load parameters from ROS2 parameter server"""
-        self.critical_angle = self.get_parameter('critical_angle').value
-        self.curvature_scaling_angle = self.get_parameter('curvature_scaling_angle').value
-        self.dt = self.get_parameter('dt').value
-        self.desired_vel = self.get_parameter('desired_vel').value
-        self.max_lin_vel = self.get_parameter('max_lin_vel').value
-        self.min_lin_vel = self.get_parameter('min_lin_vel').value
-        self.max_ang_vel = self.get_parameter('max_ang_vel').value
-        self.min_ang_vel = self.get_parameter('min_ang_vel').value
-        self.max_lin_acc = self.get_parameter('max_lin_acc').value
-        self.max_lin_dec = self.get_parameter('max_lin_dec').value
-        self.max_ang_acc = self.get_parameter('max_ang_acc').value
-        self.stop_lin_dec = self.get_parameter('stop_lin_dec').value
-        for name in ('max_ang_acc', 'stop_lin_dec'):
-            value = getattr(self, name)
-            if not math.isfinite(value) or value <= 0.0:
-                raise ValueError(f'{name} must be finite and greater than zero')
-        self.look_ahead_distance = self.get_parameter('look_ahead_distance').value
-        self.look_ahead_error_margin = self.get_parameter('look_ahead_error_margin').value
-        self.goal_reaching_threshold = self.get_parameter('goal_reaching_threshold').value
-        self.fixed_frame = self.get_parameter('fixed_frame').value
-        self.robot_frame = self.get_parameter('robot_frame').value
+        for name in (
+            'dt', 'desired_vel', 'max_lin_vel', 'max_ang_vel',
+            'max_lin_acc', 'max_lin_dec', 'max_ang_acc', 'stop_lin_dec',
+            'goal_reaching_threshold', 'waypoint_reaching_threshold','turn_enter_angle', 'turn_exit_angle',
+            'fixed_frame', 'robot_frame',
+        ):
+            setattr(self, name, self.get_parameter(name).value)
 
     def odom_callback(self, msg):
         """Handle odometry messages"""
@@ -118,76 +103,102 @@ class PurePursuitController(Node):
         return dist
 
     def path_callback(self, msg):
-        """Handle new path messages"""
-        self.path_to_exec = list(msg.poses)
-        self.get_logger().info(f'Received new path with {len(self.path_to_exec)} waypoints')
+        if msg.header.frame_id and msg.header.frame_id != self.fixed_frame:
+            self.get_logger().error("Path must be expressed in " + self.fixed_frame)
+            self.path_to_exec = []
+            return
+
+        points = []
+        for waypoint in msg.poses:
+            if points and self.calculate_distance(
+                    points[-1].pose, waypoint.pose) < 1e-6:
+                continue
+
+            # Remove only redundant points on the same straight segment.
+            while len(points) >= 2:
+                a = points[-2].pose.position
+                b = points[-1].pose.position
+                c = waypoint.pose.position
+                ux, uy = b.x - a.x, b.y - a.y
+                vx, vy = c.x - b.x, c.y - b.y
+                cross = ux * vy - uy * vx
+                dot = ux * vx + uy * vy
+                if abs(cross) > 1e-9 or dot <= 0.0:
+                    break
+                points.pop()
+
+            points.append(waypoint)
+
+        self.path_to_exec = points
+        self._advance_after_stop = False
+        self._settle_until = 0.0
+        self._turning = False
+        self.get_logger().info(
+            f"Following {len(points)} ordered path points"
+        )
 
     def control_loop(self):
-        """Main control loop called at fixed rate"""
-        # print('Control loop iteration')
-        # Check if path is empty
-        if len(self.path_to_exec) <= 0:
-            # Finish braking and keep refreshing the stopped command.
+        now = time.monotonic()
+        if not self.path_to_exec:
             self.stop_robot()
             return
 
-        # Check if goal is reached
-        # print('last point in path:', self.path_to_exec[-1].pose.position)
-        # print('current pose:', self.current_pose.position)
-        # print('distance to goal:', self.calculate_distance(self.path_to_exec[-1].pose, self.current_pose), 'goal threshold:', self.goal_reaching_threshold)
-        if self.calculate_distance(self.path_to_exec[-1].pose, self.current_pose) < self.goal_reaching_threshold:
-            self.get_logger().info('Reached goal tolerance; braking to a stop')
-            self.path_to_exec = []
+        if self._advance_after_stop:
+            self.stop_robot()
+
+            if abs(self._last_cmd_vx) > 1e-6 or abs(self._last_cmd_wz) > 1e-6:
+                self._settle_until = 0.0
+                return
+
+            if self._settle_until == 0.0:
+                self._settle_until = now + 0.3
+            elif now >= self._settle_until:
+                if self.calculate_distance(
+                        self.current_pose, self.path_to_exec[0].pose
+                ) <= self.goal_reaching_threshold:
+                    self.path_to_exec.pop(0)
+
+                self._advance_after_stop = False
+                self._settle_until = 0.0
+                self._turning = False
+            return
+
+        if not self.compute_command_velocity():
             self.stop_robot()
             return
-        # print('calculated distance to goal')
 
-        # Compute and publish velocity command
-        if self.compute_command_velocity():
-            # Enforce forward-only operation and maximum forward speed.
-            self.cmd_vel.linear.x = max(
-                0.0, min(self.cmd_vel.linear.x, self.max_lin_vel)
-            )
-            target_vx = self.cmd_vel.linear.x
-            previous_vx = getattr(self, "_last_cmd_vx", 0.0)
+        vx = self.cmd_vel.linear.x
+        wz = self.cmd_vel.angular.z
+        previous_vx = getattr(self, '_last_cmd_vx', 0.0)
+        previous_wz = getattr(self, '_last_cmd_wz', 0.0)
 
-            if target_vx == 0.0:
-                # Stop immediately when rotation in place is required.
-                limited_vx = 0.0
-            else:
-                # Limit acceleration and deceleration.
-                rate = (self.max_lin_acc if target_vx > previous_vx
-                        else self.max_lin_dec)
-                max_change = rate * self.dt
-                limited_vx = previous_vx + max(
-                    -max_change,
-                    min(max_change, target_vx - previous_vx)
-                )
+        # Finish braking before switching between walking and turning.
+        if ((wz < 0.0 and previous_vx > 1e-6) or
+                (vx > 0.0 and previous_wz < -1e-6)):
+            self.stop_robot()
+            self._settle_until = now + 0.3
+            return
 
-            self.cmd_vel.linear.x = limited_vx
-            self._last_cmd_vx = limited_vx
+        if now < self._settle_until:
+            self.stop_robot()
+            return
+        self._settle_until = 0.0
 
-            # Limit angular acceleration to prevent oscillating commands.
-            target_wz = max(
-                -self.max_ang_vel,
-                min(self.max_ang_vel, self.cmd_vel.angular.z)
-            )
-            previous_wz = getattr(self, "_last_cmd_wz", 0.0)
+        rate = self.max_lin_acc if vx > previous_vx else self.max_lin_dec
+        dv = rate * self.dt
+        dw = self.max_ang_acc * self.dt
 
-            max_change = self.max_ang_acc * self.dt
+        self.cmd_vel.linear.x = previous_vx + max(
+            -dv, min(dv, vx - previous_vx)
+        )
+        self.cmd_vel.linear.y = 0.0
+        self.cmd_vel.angular.z = previous_wz + max(
+            -dw, min(dw, wz - previous_wz)
+        )
 
-            limited_wz = previous_wz + max(
-                -max_change,
-                min(max_change, target_wz - previous_wz)
-            )
-
-            self.cmd_vel.angular.z = limited_wz
-            self._last_cmd_wz = limited_wz
-
-            self.cmd_vel_pub.publish(self.cmd_vel)
-        else:
-            self.get_logger().warn("Can't track given path")
-            self.stop_robot(immediate=True)
+        self._last_cmd_vx = self.cmd_vel.linear.x
+        self._last_cmd_wz = self.cmd_vel.angular.z
+        self.cmd_vel_pub.publish(self.cmd_vel)
 
     def stop_robot(self, immediate=False):
         """Brake over successive timer ticks; stop immediately on tracking failure."""
@@ -219,154 +230,71 @@ class PurePursuitController(Node):
         self.cmd_vel_pub.publish(self.cmd_vel)
 
     def compute_command_velocity(self):
-        # print('computing velocity commands')
-        """Compute velocity commands using pure pursuit algorithm"""
-        if len(self.path_to_exec) == 0:
-            # print('path empty')
+        if not self.path_to_exec:
             return False
 
-        # print('0')
-        # Find closest point on the path
-        dists = [self.calculate_distance(self.current_pose, wp.pose)
-                 for wp in self.path_to_exec]
-        # print('1')
-        closest_waypoint_ind = np.argmin(dists)
-        # print('2')
-
-        # Prune path to the closest waypoint
-        self.path_to_exec = self.path_to_exec[closest_waypoint_ind:]
-        # print('pruned path:')
-        # for wp in self.path_to_exec:
-        #     print(f'  waypoint: {wp.pose.position.x}, {wp.pose.position.y}, {wp.pose.position.z}')
-        # print('3')
-
-        # Find carrot waypoint
-        carrot_point_ind = len(self.path_to_exec) - 1
-        # print('4')
-        for i in range(len(self.path_to_exec)):
-            # print('5', i, '0')
-            if self.calculate_distance(self.current_pose, self.path_to_exec[i].pose) >= self.look_ahead_distance:
-                carrot_point_ind = i
+                # Accept nearby intermediate waypoints without stopping first.
+        while len(self.path_to_exec) > 1:
+            distance = self.calculate_distance(
+                self.current_pose, self.path_to_exec[0].pose
+            )
+            if distance > self.waypoint_reaching_threshold:
                 break
-            # print('5', i, '1')
 
-        # Carrot waypoint to follow
-        carrot_waypoint = copy.deepcopy(self.path_to_exec[carrot_point_ind].pose)
-        # print('6')
+            self.path_to_exec.pop(0)
+            self._turning = False
 
-        # Interpolate carrot point if it's too far
-        if (self.calculate_distance(self.current_pose, self.path_to_exec[carrot_point_ind].pose) >=
-            (self.look_ahead_distance + self.look_ahead_error_margin) and carrot_point_ind != 0):
+        waypoint = self.path_to_exec[0]
+        distance = self.calculate_distance(
+            self.current_pose, waypoint.pose
+        )
 
-            v2 = np.array([
-                self.path_to_exec[carrot_point_ind].pose.position.x,
-                self.path_to_exec[carrot_point_ind].pose.position.y,
-                self.path_to_exec[carrot_point_ind].pose.position.z
-            ])
-            v1 = np.array([
-                self.path_to_exec[carrot_point_ind-1].pose.position.x,
-                self.path_to_exec[carrot_point_ind-1].pose.position.y,
-                self.path_to_exec[carrot_point_ind-1].pose.position.z
-            ])
+        # Stop accurately at the final destination.
+        if (len(self.path_to_exec) == 1 and
+                distance <= self.goal_reaching_threshold):
+            self._advance_after_stop = True
+            return False
 
-            dir_vec = v2 - v1
-            dir_norm = np.linalg.norm(dir_vec)
-
-            d = 0.0
-            while d < dir_norm:
-                v = v1 + (v2 - v1) / dir_norm * d
-                cv = np.array([
-                    self.current_pose.position.x,
-                    self.current_pose.position.y,
-                    self.current_pose.position.z
-                ])
-                if np.linalg.norm(v - cv) >= self.look_ahead_distance:
-                    carrot_waypoint.position.x = v[0]
-                    carrot_waypoint.position.y = v[1]
-                    carrot_waypoint.position.z = v[2]
-                    break
-                d += self.look_ahead_error_margin
-
-        # print('7')
-        # Update path with carrot waypoint
-        carrot_waypoint_stamped = PoseStamped()
-        # print('8')
-        carrot_waypoint_stamped.pose = carrot_waypoint
-        # print('9')
-        # self.path_to_exec = [carrot_waypoint_stamped] + self.path_to_exec[carrot_point_ind:]
-        # print('10')
-
-        # Transform carrot point into robot frame
         try:
             transform = self.tf_buffer.lookup_transform(
                 self.robot_frame,
                 self.fixed_frame,
                 rclpy.time.Time()
             )
-
-            carrot_waypoint_stamped_fixed = PoseStamped()
-            carrot_waypoint_stamped_fixed.header.frame_id = self.fixed_frame
-            carrot_waypoint_stamped_fixed.pose = carrot_waypoint
-            # print("10.1")
-            # carrot_waypoint_robot_stamped = do_transform_pose(
-            #     carrot_waypoint_stamped_fixed, transform
-            # )
-            # print("10.2")
-            # carrot_waypoint_robot = carrot_waypoint_robot_stamped.pose
-            carrot_waypoint_robot = do_transform_pose(
-                carrot_waypoint, transform
-            )
-            # print("10.2")
-            carrot_waypoint_robot = carrot_waypoint_robot
-
-        except Exception as e:
-            self.get_logger().error(f'Transform error: {str(e)}')
+            target = do_transform_pose(waypoint.pose, transform)
+        except Exception as error:
+            self.get_logger().error(f"Transform error: {error}")
             return False
 
-        # print('11')
-        # Publish carrot point
-        ps = PoseStamped()
-        # print('12')
-        ps.header.frame_id = self.robot_frame
-        ps.pose = carrot_waypoint_robot
-        # print('13')
-        self.carrot_point_pub.publish(ps)
-        # print('14')
+        marker = PoseStamped()
+        marker.header.frame_id = self.robot_frame
+        marker.pose = target
+        self.carrot_point_pub.publish(marker)
 
-        # Calculate control commands
-        carrot_x = carrot_waypoint_robot.position.x
-        carrot_y = carrot_waypoint_robot.position.y
-        # print('15')
+        angle = math.atan2(target.position.y, target.position.x)
 
-        # Forward-only: rotate toward waypoints behind the robot.
-        lin_vel_sign = 1
-        delta_theta = math.atan2(carrot_y, carrot_x)
-
-        ang_vel_sign = 1 if delta_theta >= 0 else -1
-
-        carrot_dist = math.sqrt(carrot_x**2 + carrot_y**2)
-        radius = carrot_dist**2 / (2.0 * (abs(carrot_y) + 0.01))
-        radius_min = carrot_dist / (2.0 * math.sin(self.curvature_scaling_angle))
-        radius_max = carrot_dist / (2.0 * math.sin(10.0 * math.pi / 180.0))
-
-        if abs(delta_theta) >= self.critical_angle:
-            # Case 1: Rotate in place
-            self.cmd_vel.linear.x = 0.23
-            self.cmd_vel.angular.z = (self.max_ang_vel) * ang_vel_sign
-        elif abs(delta_theta) >= self.curvature_scaling_angle:
-            # Case 2: Curvature scaled velocity
-            self.cmd_vel.linear.x = lin_vel_sign * self.desired_vel * (radius / radius_min)
-            self.cmd_vel.angular.z = ang_vel_sign * abs(self.cmd_vel.linear.x) / radius
-            if abs(self.cmd_vel.angular.z) > self.max_ang_vel:
-                self.cmd_vel.angular.z = ang_vel_sign * self.max_ang_vel
+        if self._turning:
+            self._turning = abs(angle) > self.turn_exit_angle
         else:
-            # Case 3: Full velocity
-            r = min(radius_max, radius)
-            self.cmd_vel.linear.x = lin_vel_sign * self.desired_vel
-            self.cmd_vel.angular.z = ang_vel_sign * abs(self.cmd_vel.linear.x) / radius
-            if abs(self.cmd_vel.angular.z) > self.max_ang_vel:
-                self.cmd_vel.angular.z = ang_vel_sign * self.max_ang_vel
-            self.cmd_vel.linear.x *= max(0.0, (r - radius_min) / (radius_max - radius_min))
+            self._turning = abs(angle) > self.turn_enter_angle
+
+        self.cmd_vel = Twist()
+
+        if self._turning:
+            # Always rotate right, including for targets to the left.
+            self.cmd_vel.angular.z = -self.max_ang_vel
+        else:
+            # Walk straight and brake before reaching each corner.
+            deceleration = min(self.max_lin_dec, self.stop_lin_dec)
+            remaining = max(
+                0.0,
+                distance - 0.5 * self.goal_reaching_threshold
+            )
+            self.cmd_vel.linear.x = min(
+                self.desired_vel,
+                self.max_lin_vel,
+                math.sqrt(2.0 * deceleration * remaining)
+            )
 
         return True
 
