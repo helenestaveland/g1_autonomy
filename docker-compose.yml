@@ -29,10 +29,10 @@ services:
   mujoco:
     hostname: "${G1_HOSTNAME}"
     profiles: [unitree]
-    image: g1-runtime:local
+    image: g1-runtime-vgl:local
     build:
       context: .
-      dockerfile: docker/g1_runtime/Dockerfile
+      dockerfile: docker/g1_virtualgl/Dockerfile
     user: "${G1_UID}:${G1_GID}"
     network_mode: host
     restart: "no"
@@ -65,8 +65,7 @@ services:
       - |
         source /opt/ros/humble/setup.bash
         cd /workspace/unitree_mujoco/simulate_python
-        exec python3 -c 'import config, runpy; config.ROBOT_SCENE = "../unitree_robots/g1/scene_29dof_room.xml"; runpy.run_path("unitree_mujoco.py", run_name="__main__")'
-
+        exec /opt/VirtualGL/bin/vglrun -d egl0 -c proxy python3 -c 'import config, runpy; config.ROBOT_SCENE = "../unitree_robots/g1/scene_29dof_warehouse.xml"; runpy.run_path("unitree_mujoco.py", run_name="__main__")'
   g1_ctrl:
     profiles: [unitree]
     image: g1-runtime:local
@@ -322,10 +321,10 @@ services:
 
   rviz2:
     profiles: [autonomy]
-    image: g1-rviz2:local
+    image: g1-rviz2-vgl:local
     build:
       context: .
-      dockerfile: config/rviz/Dockerfile
+      dockerfile: docker/rviz2_virtualgl/Dockerfile
     user: "${G1_UID}:${G1_GID}"
     network_mode: host
     restart: "no"
@@ -356,4 +355,4 @@ services:
       - |
         source /opt/ros/humble/setup.bash
         source /opt/g1_ros2_ws/install/local_setup.bash
-        exec ros2 run rviz2 rviz2 -d /config/g1_ros2.rviz
+        exec /opt/VirtualGL/bin/vglrun -d egl0 -c proxy ros2 run rviz2 rviz2 -d /config/g1_ros2.rviz
